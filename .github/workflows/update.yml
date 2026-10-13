@@ -7,6 +7,7 @@ permissions:
   contents: write
   pull-requests: write
   actions: write
+  statuses: write
 concurrency:
   group: propose-release
   cancel-in-progress: false
@@ -50,4 +51,7 @@ jobs:
         if: steps.pr.outputs.pull-request-number
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref automation/update-release
+          PR_SHA: ${{ steps.pr.outputs.pull-request-head-sha }}
+        run: |
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$PR_SHA" -f state=pending -f context='Package build and tests' -f description='Automatic package checks starting'
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref automation/update-release

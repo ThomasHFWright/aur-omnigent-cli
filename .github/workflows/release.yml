@@ -46,8 +46,21 @@ jobs:
           path: /verified/
           include-hidden-files: true
           retention-days: 7
-  merge:
+  report:
     needs: build
+    if: always() && github.ref == 'refs/heads/automation/update-release'
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - name: Show build result on the update PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_STATE: ${{ needs.build.result == 'success' && 'success' || 'failure' }}
+        run: |
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" -f state="$BUILD_STATE" -f context='Package build and tests' -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" -f description='Automatic package build and test result'
+  merge:
+    needs: [build, report]
     if: github.ref == 'refs/heads/automation/update-release'
     runs-on: ubuntu-latest
     permissions:
