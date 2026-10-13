@@ -1,23 +1,19 @@
 name: Build and publish AUR release
 on:
-  schedule:
-    - cron: '41 */6 * * *'
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, automation/update-release]
     paths: [PKGBUILD, .SRCINFO, requirements.txt, omnigent, smoke-test.py, LicenseRef-bundled-dependencies, '.github/**']
 permissions:
   contents: read
 concurrency:
-  group: aur-cli-release
+  group: aur-release-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   build:
     runs-on: ubuntu-latest
     container: archlinux:base-devel
     timeout-minutes: 30
-    outputs:
-      publish: ${{ steps.release.outputs.publish }}
     steps:
       - name: Install release tools
         run: pacman -Syu --noconfirm --needed git python python-packaging uv
@@ -29,18 +25,12 @@ jobs:
           useradd --create-home builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - name: Resolve stable release and supported dependencies
-        id: release
+      - name: Validate committed recipe
         run: |
           runuser -u builder -- python .github/scripts/update-release.py --self-test
-          runuser -u builder -- python .github/scripts/update-release.py
-          if git diff --quiet -- PKGBUILD .SRCINFO requirements.txt && [ '${{ github.event_name }}' = schedule ]; then
-            echo publish=false >> "$GITHUB_OUTPUT"
-          else
-            echo publish=true >> "$GITHUB_OUTPUT"
-          fi
+          runuser -u builder -- makepkg --printsrcinfo > /tmp/generated-srcinfo
+          diff -u .SRCINFO /tmp/generated-srcinfo
       - name: Install build dependencies and freeze publication files
-        if: steps.release.outputs.publish == 'true'
         shell: bash
         run: |
           mapfile -t deps < <(awk '$1 == "depends" || $1 == "makedepends" || $1 == "checkdepends" {print $3}' .SRCINFO)
@@ -49,21 +39,34 @@ jobs:
           cp PKGBUILD .SRCINFO requirements.txt omnigent smoke-test.py LicenseRef-bundled-dependencies /verified/
           chmod -R a-w /verified
       - name: Build and test without publication credentials
-        if: steps.release.outputs.publish == 'true'
         run: runuser -u builder -- env -i HOME=/home/builder PATH=/usr/bin:/bin TERM=xterm-256color makepkg --cleanbuild --check --noconfirm
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: steps.release.outputs.publish == 'true'
         with:
           name: verified-recipe
           path: /verified/
           include-hidden-files: true
           retention-days: 7
-  publish:
+  merge:
     needs: build
-    if: needs.build.outputs.publish == 'true'
+    if: github.ref == 'refs/heads/automation/update-release'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Merge only the tested update commit
+        run: |
+          set -eu
+          gh pr merge automation/update-release --repo "$GITHUB_REPOSITORY" --squash --match-head-commit "$GITHUB_SHA"
+          # A merge made with GITHUB_TOKEN does not trigger the main push workflow.
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref main
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -87,17 +90,6 @@ jobs:
           cd "$key_dir/aur"
           git add PKGBUILD .SRCINFO requirements.txt omnigent smoke-test.py LicenseRef-bundled-dependencies
           if ! git diff --cached --quiet; then
-            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Update tested Omnigent CLI package'
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Update tested Omnigent package'
             git push origin HEAD:master
-          fi
-      - name: Record tested release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -eu
-          cp verified/* verified/.SRCINFO .
-          git add PKGBUILD .SRCINFO requirements.txt omnigent smoke-test.py LicenseRef-bundled-dependencies
-          if ! git diff --cached --quiet; then
-            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Record tested CLI release and dependency lock'
-            git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" push origin HEAD:main
           fi

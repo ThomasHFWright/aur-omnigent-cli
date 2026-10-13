@@ -33,13 +33,23 @@ are not included; upstream's extras-install prompts cannot modify it as a normal
 user. Request packaging support for extras instead of running those prompts as
 root. Native Codex and Claude need only their optional executable packages.
 
-GitHub Actions checks every six hours for stable releases and compatible
-runtime dependency updates. Third-party releases have a seven-day waiting
-period. Changes publish to AUR automatically only after an unprivileged build,
-full Python dependency validation, relocated CLI startup, and database,
-password hashing, CEL, WebSocket and isolated server authentication checks pass. Publication uses a
-separate job; the AUR key is never supplied to the build job. Installation on
-your machine remains a manual package-manager action.
+GitHub Actions checks every six hours for stable release updates and opens or
+refreshes an update PR. The CLI also refreshes compatible runtime dependencies,
+with a seven-day waiting period for third-party releases.
+
+Builds and package tests start automatically, without an approval click. The
+workflow merges the exact tested PR commit only after all build checks pass.
+It then rebuilds the committed recipe on `main` and publishes to AUR from a
+separate job. The AUR key is never supplied to the build job. A failed build
+blocks automatic merging or publication; GitHub Actions failure notifications
+identify updates needing maintenance. Installation on your machine stays manual.
+
+Run **Propose stable release update** in Actions to check immediately. Run
+**Build and publish AUR release** on an update branch to retry its tests, or on
+`main` to retry publication. The build workflow never resolves a newer release:
+it tests exactly the recipe in the selected commit. Explicit workflow dispatch
+ensures bot-created PRs are tested and bot merges publish automatically.
+GitHub may delay scheduled runs or disable schedules after 60 days of inactivity.
 
 The package pins the system Python minor version. When Arch advances Python,
 the workflow resolves matching wheels and rebuilds before publishing matching

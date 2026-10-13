@@ -1,0 +1,53 @@
+name: Propose stable release update
+on:
+  schedule:
+    - cron: '41 */6 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+concurrency:
+  group: propose-release
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    timeout-minutes: 15
+    steps:
+      - name: Install release tools
+        run: pacman -Syu --noconfirm --needed git python python-packaging uv github-cli
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Resolve stable release
+        run: |
+          useradd --create-home builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          runuser -u builder -- python .github/scripts/update-release.py --self-test
+          runuser -u builder -- python .github/scripts/update-release.py
+      - name: Open or refresh update PR
+        id: pr
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
+        with:
+          branch: automation/update-release
+          delete-branch: true
+          add-paths: |
+            PKGBUILD
+            .SRCINFO
+            requirements.txt
+          commit-message: Update omnigent-cli stable release and dependencies
+          title: Update omnigent-cli stable release and dependencies
+          body: |
+            Updates the recipe from the latest stable upstream release, including source checksums and package metadata.
+
+            Build and package tests start automatically. A successful build merges this PR automatically; the merged recipe is then rebuilt and published to AUR. A failed check prevents automatic merging and publication.
+      # Explicit dispatch starts tests for bot commits without a PAT or approval click.
+      - name: Start automatic build and tests
+        if: steps.pr.outputs.pull-request-number
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref automation/update-release
