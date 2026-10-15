@@ -34,8 +34,13 @@ user. Request packaging support for extras instead of running those prompts as
 root. Native Codex and Claude need only their optional executable packages.
 
 GitHub Actions checks every six hours for stable release updates and opens or
-refreshes an update PR. The CLI also refreshes compatible runtime dependencies,
-with a seven-day waiting period for third-party releases.
+refreshes an update PR. Routine dependency updates are batched weekly on Monday
+at 03:17 UTC, retaining the seven-day waiting period for third-party releases.
+Six-hour checks leave dependencies pinned when Omnigent and the system Python
+minor version are unchanged. New Omnigent releases and Python compatibility
+rebuilds resolve dependencies immediately rather than waiting for the weekly batch.
+An outstanding dependency PR stays open and its checks are retried on subsequent
+release checks.
 
 Builds and package tests start automatically, without an approval click. The
 workflow merges the exact tested PR commit only after all build checks pass.
@@ -44,7 +49,15 @@ separate job. The AUR key is never supplied to the build job. A failed build
 blocks automatic merging or publication; GitHub Actions failure notifications
 identify updates needing maintenance. Installation on your machine stays manual.
 
-Run **Propose stable release update** in Actions to check immediately. Run
+Run **Propose stable release update** in Actions to check immediately. Its
+`dependency_refresh` input defaults to `none`; choose `routine` for an early
+batch, or `urgent` for a known security fix that cannot wait. `urgent` refreshes
+all compatible dependencies and bypasses the seven-day cooldown, but still
+requires the same build and test gates. Security advisories are not automatically
+monitored. The equivalent local option is
+`--dependency-refresh routine` or `--dependency-refresh urgent`.
+
+Run
 **Build and publish AUR release** on an update branch to retry its tests, or on
 `main` to retry publication. The build workflow never resolves a newer release:
 it tests exactly the recipe in the selected commit. Explicit workflow dispatch

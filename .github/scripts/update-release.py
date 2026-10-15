@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Resolve supported versions; put every download and hash in makepkg's sources."""
+import argparse
 import datetime
 import hashlib
 import json
@@ -42,8 +43,17 @@ def artifact(url, digest):
     return f'{filename}::{url}', digest
 
 
+def needs_refresh(version, current, python, packaged_python, mode):
+    return version != current or python != packaged_python or mode != 'none'
+
+
 def main():
-    if sys.argv[1:] == ['--self-test']:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--self-test', action='store_true')
+    parser.add_argument('--dependency-refresh', choices=('none', 'routine', 'urgent'), default='none',
+                        help='Refresh dependencies even without a new release; urgent bypasses the seven-day cooldown')
+    args = parser.parse_args()
+    if args.self_test:
         assert stable_version(dict(tag_name='v0.17.0', draft=False, prerelease=False)) == '0.17.0'
         for tag in ['main', 'v0.17.0rc1', 'v1.2.3;echo bad']:
             try:
@@ -58,7 +68,12 @@ def main():
             pass
         else:
             raise AssertionError('Accepted an unexpected artifact origin')
-        print('PASS release and artifact validation')
+        assert not needs_refresh('0.18.0', '0.18.0', '3.14', '3.14', 'none')
+        assert needs_refresh('0.19.0', '0.18.0', '3.14', '3.14', 'none')
+        assert needs_refresh('0.18.0', '0.18.0', '3.15', '3.14', 'none')
+        for mode in ('routine', 'urgent'):
+            assert needs_refresh('0.18.0', '0.18.0', '3.14', '3.14', mode)
+        print('PASS release, artifact and dependency refresh policy validation')
         return
 
     if sys.platform != 'linux' or __import__('platform').machine() != 'x86_64':
@@ -70,6 +85,10 @@ def main():
     if int(subprocess.check_output(['vercmp', version, current])) < 0:
         raise SystemExit('Refusing to downgrade the stable recipe')
     python = f'{sys.version_info.major}.{sys.version_info.minor}'
+    packaged_python = re.search(r'^_python=(.+)$', recipe, re.M)[1]
+    if not needs_refresh(version, current, python, packaged_python, args.dependency_refresh):
+        print(f'Already at {version} on Python {python}; dependencies stay pinned until the weekly refresh')
+        return
     next_python = f'{sys.version_info.major}.{sys.version_info.minor + 1}'
     tomorrow = str(datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=1))
     with tempfile.TemporaryDirectory(prefix='omnigent-lock-') as directory:
@@ -77,10 +96,12 @@ def main():
         (root / 'requirements.in').write_text(f'omnigent=={version}\n')
         command = ['uv', 'pip', 'compile', str(root / 'requirements.in'), '--upgrade',
                    '--python-version', python, '--python-platform', 'x86_64-unknown-linux-gnu',
-                   '--only-binary', ':all:', '--exclude-newer', '7d', '--format', 'pylock.toml',
+                   '--only-binary', ':all:', '--format', 'pylock.toml',
                    '-o', str(root / 'pylock.toml'), '--quiet']
-        for name in FIRST_PARTY:
-            command += ['--exclude-newer-package', f'{name}={tomorrow}']
+        if args.dependency_refresh != 'urgent':
+            command += ['--exclude-newer', '7d']
+            for name in FIRST_PARTY:
+                command += ['--exclude-newer-package', f'{name}={tomorrow}']
         subprocess.run(command, check=True)
         lock = tomllib.loads((root / 'pylock.toml').read_text())
 
